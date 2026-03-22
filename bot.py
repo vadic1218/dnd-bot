@@ -113,9 +113,8 @@ def parse_math_expression(text):
     if not contains_only_math_tokens(text):
         return None
 
-    expr = normalize_math_expression(text)
-
-    percent_match = re.fullmatch(r"(.+?)([+\-])(\d+(?:\.\d+)?)%", expr)
+    raw_expr = text.replace(" ", "").replace(",", ".")
+    percent_match = re.fullmatch(r"(.+?)([+\-])(\d+(?:\.\d+)?)%", raw_expr)
     if percent_match:
         base_expr = percent_match.group(1)
         operator_symbol = percent_match.group(2)
@@ -129,6 +128,7 @@ def parse_math_expression(text):
             return int(round(value))
         return round(value, 4)
 
+    expr = normalize_math_expression(text)
     try:
         tree = ast.parse(expr, mode="eval")
         value = eval_math_node(tree)
