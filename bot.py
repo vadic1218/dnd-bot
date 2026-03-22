@@ -88,6 +88,23 @@ def parse_dice_expression(text):
     }
 
 
+def parse_named_roll(text):
+    match = re.fullmatch(
+        r"\s*(атака|бросок|чек|проверка)\s+(.+?)\s+(\d*d\d+(?:[+-]\d+)?)\s*",
+        text.lower(),
+    )
+    if not match:
+        return None
+
+    label = match.group(2).strip()
+    result = parse_dice_expression(match.group(3))
+    if not result:
+        return None
+    result["label"] = label
+    result["kind"] = match.group(1)
+    return result
+
+
 def format_dice_result(result):
     modifier = result["modifier"]
     modifier_text = f"{modifier:+d}" if modifier else ""
@@ -97,6 +114,11 @@ def format_dice_result(result):
         f"• Выпало: {rolls_text}\n"
         f"• Итог: *{result['total']}*"
     )
+
+
+def format_named_roll_result(result):
+    base = format_dice_result(result)
+    return f"⚔️ *{result['kind'].capitalize()} {result['label']}*\n\n{base}"
 
 
 def parse_key_value_segments(text):
@@ -121,6 +143,18 @@ def parse_key_value_segments(text):
 def format_character(user_id):
     character = db.get_character(user_id)
     stats = db.get_stats(user_id)
+    primary_order = [
+        "strength",
+        "dexterity",
+        "constitution",
+        "intelligence",
+        "wisdom",
+        "charisma",
+        "hp",
+        "ac",
+        "initiative",
+        "speed",
+    ]
 
     lines = [
         "🧙 *Персонаж*",
@@ -133,10 +167,17 @@ def format_character(user_id):
 
     if stats:
         lines.extend(["", "*Статы:*"])
+        for key in primary_order:
+            if key in stats:
+                lines.append(f"• {key}: {stats[key]}")
         for key, value in stats.items():
-            lines.append(f"• {key}: {value}")
+            if key not in primary_order:
+                lines.append(f"• {key}: {value}")
     else:
         lines.extend(["", "Статы пока не записаны."])
+
+    if character.get("notes"):
+        lines.extend(["", f"*Заметки:* {character['notes']}"])
 
     lines.extend(
         [
@@ -277,6 +318,16 @@ def handle_inventory_update(user_id, text):
     return f"✅ В инвентарь сохранено: *{item_name}* x{quantity}"
 
 
+def handle_inventory_delete(user_id, text):
+    match = re.fullmatch(r"\s*(?:удали|убери)\s+(?:из\s+инвентаря\s+)?(.+)", text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    item_name = match.group(1).strip()
+    if db.delete_inventory_item(user_id, item_name):
+        return f"🗑️ Из инвентаря удалено: *{item_name}*"
+    return f"❌ Предмет `{item_name}` не найден в инвентаре."
+
+
 def handle_item_definition_update(user_id, text):
     match = re.fullmatch(r"\s*(?:добавь\s+)?предмет\s+(.+)", text, flags=re.IGNORECASE)
     if not match:
@@ -289,6 +340,16 @@ def handle_item_definition_update(user_id, text):
 
     db.upsert_item_definition(user_id, item_name, description=description, stats=stats)
     return f"✅ Предмет сохранен: *{item_name}*"
+
+
+def handle_item_definition_delete(user_id, text):
+    match = re.fullmatch(r"\s*(?:удали|убери)\s+предмет\s+(.+)", text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    item_name = match.group(1).strip()
+    if db.delete_item_definition(user_id, item_name):
+        return f"🗑️ Предмет удален: *{item_name}*"
+    return f"❌ Предмет `{item_name}` не найден."
 
 
 def handle_skill_update(user_id, text):
@@ -305,6 +366,16 @@ def handle_skill_update(user_id, text):
     notes = (match.group(3) or "").strip()
     db.upsert_skill(user_id, skill_name, bonus=bonus, notes=notes)
     return f"✅ Навык сохранен: *{skill_name}* {bonus:+d}"
+
+
+def handle_skill_delete(user_id, text):
+    match = re.fullmatch(r"\s*(?:удали|убери)\s+навык\s+(.+)", text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    skill_name = match.group(1).strip()
+    if db.delete_skill(user_id, skill_name):
+        return f"🗑️ Навык удален: *{skill_name}*"
+    return f"❌ Навык `{skill_name}` не найден."
 
 
 def handle_show_requests(user_id, text):
@@ -325,6 +396,10 @@ def interpret_freeform(user_id, text):
     if not text:
         return "Напишите действие или используйте кнопки меню."
 
+    named_roll = parse_named_roll(text)
+    if named_roll:
+        return format_named_roll_result(named_roll)
+
     dice_result = parse_dice_expression(text)
     if dice_result:
         return format_dice_result(dice_result)
@@ -335,8 +410,11 @@ def interpret_freeform(user_id, text):
 
     for handler in (
         handle_character_update,
+        handle_inventory_delete,
         handle_inventory_update,
+        handle_item_definition_delete,
         handle_item_definition_update,
+        handle_skill_delete,
         handle_skill_update,
     ):
         result = handler(user_id, text)
@@ -347,10 +425,13 @@ def interpret_freeform(user_id, text):
         "Не понял запрос.\n\n"
         "Попробуйте один из примеров:\n"
         "• `2d20+5`\n"
+        "• `атака мечом 1d20+5`\n"
         "• `сила 16`\n"
+        "• `удали предмет щит`\n"
         "• `добавь в инвентарь 2 зелья лечения`\n"
         "• `предмет длинный меч; урон=1d8`\n"
         "• `навык скрытность +6`\n"
+        "• `удали навык скрытность`\n"
         "• `мои навыки`"
     )
 

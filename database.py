@@ -186,6 +186,19 @@ class Database:
         conn.close()
         return [dict(row) for row in rows]
 
+    def delete_skill(self, user_id, skill_name):
+        with self.lock:
+            conn = self._connect()
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM skills WHERE user_id = ? AND lower(skill_name) = lower(?)",
+                (user_id, skill_name.strip()),
+            )
+            deleted = cur.rowcount > 0
+            conn.commit()
+            conn.close()
+            return deleted
+
     def upsert_item_definition(self, user_id, item_name, description="", stats=None):
         self.ensure_character(user_id)
         stats_payload = json.dumps(stats or {}, ensure_ascii=False)
@@ -221,6 +234,19 @@ class Database:
             items.append(item)
         return items
 
+    def delete_item_definition(self, user_id, item_name):
+        with self.lock:
+            conn = self._connect()
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM item_definitions WHERE user_id = ? AND lower(item_name) = lower(?)",
+                (user_id, item_name.strip()),
+            )
+            deleted = cur.rowcount > 0
+            conn.commit()
+            conn.close()
+            return deleted
+
     def upsert_inventory_item(self, user_id, item_name, quantity=1, notes="", properties=None):
         self.ensure_character(user_id)
         properties_payload = json.dumps(properties or {}, ensure_ascii=False)
@@ -255,6 +281,19 @@ class Database:
             item["properties"] = json.loads(item.pop("properties_json") or "{}")
             items.append(item)
         return items
+
+    def delete_inventory_item(self, user_id, item_name):
+        with self.lock:
+            conn = self._connect()
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM inventory_items WHERE user_id = ? AND lower(item_name) = lower(?)",
+                (user_id, item_name.strip()),
+            )
+            deleted = cur.rowcount > 0
+            conn.commit()
+            conn.close()
+            return deleted
 
 
 db = Database()
