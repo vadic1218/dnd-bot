@@ -36,6 +36,7 @@ class Database:
                     race TEXT DEFAULT '',
                     level INTEGER DEFAULT 1,
                     notes TEXT DEFAULT '',
+                    sorcery_points INTEGER DEFAULT 0,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
@@ -96,8 +97,46 @@ class Database:
                 """
             )
 
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS creatures (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    creature_name TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    stats_json TEXT DEFAULT '{}',
+                    notes TEXT DEFAULT '',
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (user_id, creature_name)
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS abilities (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    ability_name TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    stats_json TEXT DEFAULT '{}',
+                    notes TEXT DEFAULT '',
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (user_id, ability_name)
+                )
+                """
+            )
+
+            self._ensure_column(cur, "characters", "sorcery_points", "INTEGER DEFAULT 0")
+
             conn.commit()
             conn.close()
+
+    def _ensure_column(self, cur, table_name, column_name, column_sql):
+        cur.execute(f"PRAGMA table_info({table_name})")
+        columns = {row["name"] for row in cur.fetchall()}
+        if column_name not in columns:
+            cur.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
 
     def ensure_character(self, user_id):
         with self.lock:
@@ -108,7 +147,8 @@ class Database:
             conn.close()
 
     def set_character_field(self, user_id, field_name, value):
-        if field_name not in {"name", "class_name", "race", "level", "notes"}:
+        allowed = {"name", "class_name", "race", "level", "notes", "sorcery_points"}
+        if field_name not in allowed:
             raise ValueError(f"Unsupported field: {field_name}")
         self.ensure_character(user_id)
         with self.lock:
@@ -289,6 +329,140 @@ class Database:
             cur.execute(
                 "DELETE FROM inventory_items WHERE user_id = ? AND lower(item_name) = lower(?)",
                 (user_id, item_name.strip()),
+            )
+            deleted = cur.rowcount > 0
+            conn.commit()
+            conn.close()
+            return deleted
+
+    def upsert_creature(self, user_id, creature_name, description="", stats=None, notes=""):
+        self.ensure_character(user_id)
+        stats_payload = json.dumps(stats or {}, ensure_ascii=False)
+        with self.lock:
+            conn = self._connect()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO creatures (user_id, creature_name, description, stats_json, notes)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, creature_name)
+                DO UPDATE SET description = excluded.description, stats_json = excluded.stats_json,
+                              notes = excluded.notes, updated_at = CURRENT_TIMESTAMP
+                """,
+                (user_id, creature_name.strip(), description.strip(), stats_payload, notes.strip()),
+            )
+            conn.commit()
+            conn.close()
+
+    def get_creatures(self, user_id):
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT creature_name, description, stats_json, notes FROM creatures WHERE user_id = ? ORDER BY creature_name",
+            (user_id,),
+        )
+        rows = cur.fetchall()
+        conn.close()
+        creatures = []
+        for row in rows:
+            creature = dict(row)
+            creature["stats"] = json.loads(creature.pop("stats_json") or "{}")
+            creatures.append(creature)
+        return creatures
+
+    def get_creature(self, user_id, creature_name):
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT creature_name, description, stats_json, notes
+            FROM creatures
+            WHERE user_id = ? AND lower(creature_name) = lower(?)
+            """,
+            (user_id, creature_name.strip()),
+        )
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        creature = dict(row)
+        creature["stats"] = json.loads(creature.pop("stats_json") or "{}")
+        return creature
+
+    def delete_creature(self, user_id, creature_name):
+        with self.lock:
+            conn = self._connect()
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM creatures WHERE user_id = ? AND lower(creature_name) = lower(?)",
+                (user_id, creature_name.strip()),
+            )
+            deleted = cur.rowcount > 0
+            conn.commit()
+            conn.close()
+            return deleted
+
+    def upsert_ability(self, user_id, ability_name, description="", stats=None, notes=""):
+        self.ensure_character(user_id)
+        stats_payload = json.dumps(stats or {}, ensure_ascii=False)
+        with self.lock:
+            conn = self._connect()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO abilities (user_id, ability_name, description, stats_json, notes)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, ability_name)
+                DO UPDATE SET description = excluded.description, stats_json = excluded.stats_json,
+                              notes = excluded.notes, updated_at = CURRENT_TIMESTAMP
+                """,
+                (user_id, ability_name.strip(), description.strip(), stats_payload, notes.strip()),
+            )
+            conn.commit()
+            conn.close()
+
+    def get_abilities(self, user_id):
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT ability_name, description, stats_json, notes FROM abilities WHERE user_id = ? ORDER BY ability_name",
+            (user_id,),
+        )
+        rows = cur.fetchall()
+        conn.close()
+        abilities = []
+        for row in rows:
+            ability = dict(row)
+            ability["stats"] = json.loads(ability.pop("stats_json") or "{}")
+            abilities.append(ability)
+        return abilities
+
+    def get_ability(self, user_id, ability_name):
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT ability_name, description, stats_json, notes
+            FROM abilities
+            WHERE user_id = ? AND lower(ability_name) = lower(?)
+            """,
+            (user_id, ability_name.strip()),
+        )
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        ability = dict(row)
+        ability["stats"] = json.loads(ability.pop("stats_json") or "{}")
+        return ability
+
+    def delete_ability(self, user_id, ability_name):
+        with self.lock:
+            conn = self._connect()
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM abilities WHERE user_id = ? AND lower(ability_name) = lower(?)",
+                (user_id, ability_name.strip()),
             )
             deleted = cur.rowcount > 0
             conn.commit()
