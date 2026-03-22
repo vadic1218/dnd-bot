@@ -1,4 +1,7 @@
 import random
+import ast
+import operator
+import random
 import re
 from pathlib import Path
 
@@ -29,6 +32,21 @@ MAIN_BUTTONS = [
     "🎲 Кубы",
     "📋 Помощь",
 ]
+
+SAFE_BINARY_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+
+SAFE_UNARY_OPS = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+}
 
 STAT_ALIASES = {
     "сила": "strength",
@@ -63,6 +81,53 @@ def build_main_keyboard():
 
 def normalize_text(text):
     return (text or "").strip()
+
+
+def normalize_math_expression(text):
+    expr = text.replace(" ", "").replace(",", ".")
+    expr = re.sub(r"(\d+(?:\.\d+)?)%", r"(\1/100)", expr)
+    return expr
+
+
+def contains_only_math_tokens(text):
+    return bool(text) and re.fullmatch(r"[0-9\.\,\+\-\*\/\(\)%\s]+", text) is not None
+
+
+def eval_math_node(node):
+    if isinstance(node, ast.Expression):
+        return eval_math_node(node.body)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+    if isinstance(node, ast.Num):
+        return node.n
+    if isinstance(node, ast.BinOp) and type(node.op) in SAFE_BINARY_OPS:
+        left = eval_math_node(node.left)
+        right = eval_math_node(node.right)
+        return SAFE_BINARY_OPS[type(node.op)](left, right)
+    if isinstance(node, ast.UnaryOp) and type(node.op) in SAFE_UNARY_OPS:
+        operand = eval_math_node(node.operand)
+        return SAFE_UNARY_OPS[type(node.op)](operand)
+    raise ValueError("Unsupported expression")
+
+
+def parse_math_expression(text):
+    if not contains_only_math_tokens(text):
+        return None
+
+    expr = normalize_math_expression(text)
+    try:
+        tree = ast.parse(expr, mode="eval")
+        value = eval_math_node(tree)
+    except Exception:
+        return None
+
+    if isinstance(value, float):
+        if abs(value - round(value)) < 1e-9:
+            value = int(round(value))
+        else:
+            value = round(value, 4)
+
+    return value
 
 
 def parse_dice_expression(text):
@@ -396,6 +461,10 @@ def interpret_freeform(user_id, text):
     if not text:
         return "Напишите действие или используйте кнопки меню."
 
+    math_result = parse_math_expression(text)
+    if math_result is not None:
+        return f"🧮 *Результат:* `{text}` = *{math_result}*"
+
     named_roll = parse_named_roll(text)
     if named_roll:
         return format_named_roll_result(named_roll)
@@ -424,6 +493,8 @@ def interpret_freeform(user_id, text):
     return (
         "Не понял запрос.\n\n"
         "Попробуйте один из примеров:\n"
+        "• `5+2`\n"
+        "• `54-30%`\n"
         "• `2d20+5`\n"
         "• `атака мечом 1d20+5`\n"
         "• `сила 16`\n"
