@@ -1,4 +1,3 @@
-import random
 import ast
 import operator
 import random
@@ -115,6 +114,21 @@ def parse_math_expression(text):
         return None
 
     expr = normalize_math_expression(text)
+
+    percent_match = re.fullmatch(r"(.+?)([+\-])(\d+(?:\.\d+)?)%", expr)
+    if percent_match:
+        base_expr = percent_match.group(1)
+        operator_symbol = percent_match.group(2)
+        percent_value = float(percent_match.group(3))
+        base_value = parse_math_expression(base_expr)
+        if base_value is None:
+            return None
+        delta = base_value * percent_value / 100
+        value = base_value + delta if operator_symbol == "+" else base_value - delta
+        if abs(value - round(value)) < 1e-9:
+            return int(round(value))
+        return round(value, 4)
+
     try:
         tree = ast.parse(expr, mode="eval")
         value = eval_math_node(tree)
@@ -491,8 +505,7 @@ def interpret_freeform(user_id, text):
             return result
 
     return (
-        "Не понял запрос.\n\n"
-        "Попробуйте один из примеров:\n"
+        "Попробуйте одну из форм:\n"
         "• `5+2`\n"
         "• `54-30%`\n"
         "• `2d20+5`\n"
